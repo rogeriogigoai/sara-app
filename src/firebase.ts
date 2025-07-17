@@ -10,12 +10,13 @@ import { getStorage } from "firebase/storage";
 // ATENÇÃO: Substitua este objeto pelas credenciais do seu projeto no Console do Firebase
 // Você pode encontrar isso em: Configurações do Projeto > Geral > Seus aplicativos > Configuração do SDK
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBUpYj1C_b7AJtcK-e1FY3tOscBvaeGYp4",
+  authDomain: "sara-v10.firebaseapp.com",
+  projectId: "sara-v10",
+  storageBucket: "sara-v10.firebasestorage.app",
+  messagingSenderId: "418480038701",
+  appId: "1:418480038701:web:2885d4e780c9a515d0e9a4",
+  measurementId: "G-X05YKNE8VH"
 };
 
 // Initialize Firebase
