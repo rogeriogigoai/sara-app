@@ -1,18 +1,18 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import ProtectedRoute from './ProtectedRoute';
-import MainLayout from '../components/layout/MainLayout'; // Importado
+import MainLayout from '../components/layout/MainLayout';
 
 import Login from '../pages/Login';
 import Dashboard from '../pages/Dashboard';
 import RegisterVehicle from '../pages/RegisterVehicle';
 import VerifyVehicle from '../pages/VerifyVehicle';
 import ViewAlerts from '../pages/ViewAlerts';
+import AlertDetail from '../pages/AlertDetail'; // Importado
 
-// Componente para agrupar as rotas que usam o layout principal
 const AppLayout = () => (
   <MainLayout>
-    <Outlet /> {/* As páginas filhas serão renderizadas aqui */}
+    <Outlet />
   </MainLayout>
 );
 
@@ -30,10 +30,8 @@ const AppRoutes = () => {
   return (
     <Router>
       <Routes>
-        {/* Rota de Login (sem layout) */}
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
         
-        {/* Rotas Protegidas com o Layout Principal */}
         <Route element={user ? <AppLayout /> : <Navigate to="/login" />}>
           <Route path="/" element={<Dashboard />} />
           <Route 
@@ -60,9 +58,17 @@ const AppRoutes = () => {
               </ProtectedRoute>
             } 
           />
+          {/* NOVA ROTA DINÂMICA ADICIONADA AQUI */}
+          <Route 
+            path="/alert/:alertId" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'operator', 'user']}>
+                <AlertDetail />
+              </ProtectedRoute>
+            } 
+          />
         </Route>
 
-        {/* Rota para qualquer outro caminho não encontrado */}
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />
       </Routes>
     </Router>

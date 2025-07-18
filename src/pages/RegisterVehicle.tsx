@@ -5,23 +5,21 @@ import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/fire
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFunctions, httpsCallable, type HttpsCallableOptions } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext'; // A LINHA QUE FALTAVA
+import { useAuth } from '../contexts/AuthContext';
 
 // --- Ícones ---
 const CameraIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-  </svg>
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
 );
 
-// --- Helper ---
+// --- Helpers ---
 const toBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onload = () => resolve((reader.result as string).split(',')[1]);
     reader.onerror = error => reject(error);
 });
+const normalizePlate = (plate: string) => plate.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 
 // --- Tipos ---
 interface Tire {
@@ -29,10 +27,11 @@ interface Tire {
   dot: string;
   brand: string;
   condition: string;
+  week: string;
+  year: string;
   imageUrl: string;
   file?: File;
 }
-
 const TIRE_POSITIONS = ['Dianteiro Esquerdo', 'Dianteiro Direito', 'Traseiro Esquerdo', 'Traseiro Direito', 'Estepe'];
 
 const RegisterVehicle = () => {
@@ -48,6 +47,7 @@ const RegisterVehicle = () => {
   const [iaLoading, setIaLoading] = useState<'plate' | 'tire' | false>(false);
   const [platePhotoUrl, setPlatePhotoUrl] = useState<string | null>(null);
 
+  // LÓGICA DA PLACA COMPLETA E CORRIGIDA
   const handlePlateFileChange = async (file: File, setFieldValue: (field: string, value: any) => void) => {
     setIaLoading('plate');
     setPlatePhotoUrl(URL.createObjectURL(file));
@@ -57,19 +57,14 @@ const RegisterVehicle = () => {
       const imageBase64 = await toBase64(file);
       const result = await analyzePlateImage({ image: imageBase64 });
       const { plateText } = result.data as { plateText: string };
-
-      console.log("Sucesso! Resposta da IA:", result.data);
-
       if (plateText && plateText !== 'N/A') {
-        setFieldValue('plate', plateText.toUpperCase());
+        setFieldValue('plate', normalizePlate(plateText));
       } else {
         alert('Não foi possível ler a placa. Por favor, digite manualmente ou tente outra foto.');
       }
     } catch (error) {
-      console.error("--- ERRO DETALHADO DO FIREBASE (CLIENT-SIDE) ---");
-      console.error(error);
-      console.error("-------------------------------------------------");
-      alert("Ocorreu um erro ao processar a imagem. Abra o console do navegador (F12) para ver os detalhes do erro.");
+      console.error("Erro ao analisar a imagem da placa:", error);
+      alert("Ocorreu um erro ao processar a imagem da placa.");
     } finally {
       setIaLoading(false);
     }
@@ -80,39 +75,39 @@ const RegisterVehicle = () => {
     setIaLoading('tire');
     setTires(prev => ({ ...prev, [position]: { ...prev[position], file, imageUrl: URL.createObjectURL(file) }}));
     try {
-      const options: HttpsCallableOptions = { timeout: 300000 };
-      const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', options);
-      const imageBase64 = await toBase64(file);
-      const result = await analyzeTireImage({ image: imageBase64 });
-      const { dot, brand, condition } = result.data as { dot: string; brand: string; condition: string; };
-      setTires(prev => ({ ...prev, [position]: { ...prev[position], dot, brand, condition } }));
+        const options: HttpsCallableOptions = { timeout: 300000 };
+        const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', options);
+        const imageBase64 = await toBase64(file);
+        const result = await analyzeTireImage({ image: imageBase64 });
+        const { dot, brand, condition, week, year } = result.data as any;
+        setTires(prev => ({ ...prev, [position]: { ...prev[position], dot, brand, condition, week, year } }));
     } catch (error) {
-      console.error("--- ERRO DETALHADO DO FIREBASE (PNEU) ---");
-      console.error(error);
-      alert("A IA não conseguiu analisar o pneu. Abra o console do navegador (F12) para ver os detalhes.");
-      setTires(prev => ({ ...prev, [position]: { ...prev[position], dot: 'Erro', brand: 'Erro', condition: 'Erro' } }));
+        console.error("Erro ao chamar a função da IA (Pneu):", error);
+        alert("A IA não conseguiu analisar o pneu. Por favor, tente uma foto mais nítida.");
+        setTires(prev => ({ ...prev, [position]: { dot: 'Erro', brand: 'Erro', condition: 'Erro', week: 'N/A', year: 'N/A' } }));
     } finally {
-      setIaLoading(false);
+        setIaLoading(false);
     }
   };
-
+  
   const validationSchema = Yup.object({
-    plate: Yup.string().matches(/^[A-Z]{3}[0-9][A-Z][0-9]{2}$|^[A-Z]{3}[0-9]{4}$/, 'Formato de placa inválido').required('A placa é obrigatória'),
+    plate: Yup.string().transform(val => normalizePlate(val)).min(7, 'A placa deve ter 7 caracteres').max(7, 'A placa deve ter 7 caracteres').required('A placa é obrigatória'),
   });
 
   const handleSubmit = async (values: { plate: string }) => {
-    if (Object.keys(tires).length !== TIRE_POSITIONS.length || Object.values(tires).some(t => !t.file)) {
+    if (Object.values(tires).filter(t => t && t.file).length !== TIRE_POSITIONS.length) {
       alert('Por favor, cadastre as imagens de todos os 5 pneus.');
       return;
     }
     setLoading(true);
+    const finalPlate = normalizePlate(values.plate);
 
     try {
       const tiresToSave = await Promise.all(
         TIRE_POSITIONS.map(async (pos) => {
           const tire = tires[pos];
           if (!tire?.file) throw new Error(`Faltando arquivo do pneu ${pos}`);
-          const storageRef = ref(storage, `tires/${values.plate}/${pos}_${Date.now()}`);
+          const storageRef = ref(storage, `tires/${finalPlate}/${pos}_${Date.now()}`);
           const snapshot = await uploadBytes(storageRef, tire.file);
           const downloadURL = await getDownloadURL(snapshot.ref);
           return {
@@ -120,13 +115,15 @@ const RegisterVehicle = () => {
             dot: tire.dot || 'N/A',
             brand: tire.brand || 'N/A',
             condition: tire.condition || 'N/A',
+            week: tire.week || 'N/A',
+            year: tire.year || 'N/A',
             imageUrl: downloadURL,
           };
         })
       );
 
       await addDoc(collection(db, 'vehicles'), {
-        plate: values.plate.toUpperCase(),
+        plate: finalPlate,
         createdAt: serverTimestamp(),
         createdBy: user?.uid,
         currentTires: tiresToSave,
@@ -154,6 +151,8 @@ const RegisterVehicle = () => {
         initialValues={{ plate: '' }}
         validationSchema={validationSchema}
         onSubmit={handleSubmit}
+        validateOnChange
+        validateOnBlur
       >
         {({ setFieldValue, errors, touched }) => (
           <Form className="mt-8 space-y-8">
@@ -169,7 +168,10 @@ const RegisterVehicle = () => {
                       id="plate"
                       name="plate"
                       className="flex-grow w-full bg-gray-700 border border-gray-600 rounded-md p-3 text-white focus:ring-2 focus:ring-blue-500 uppercase"
-                      placeholder="AAA0A00"
+                      placeholder="AAA0A00 ou AAA0000"
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                        setFieldValue('plate', normalizePlate(e.target.value))
+                      }}
                     />
                     <label htmlFor="plate-file-upload" className={`cursor-pointer bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-md transition-colors ${iaLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <CameraIcon />
@@ -185,6 +187,7 @@ const RegisterVehicle = () => {
                 </div>
               </div>
             </div>
+
             <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
               <h2 className="text-xl font-semibold text-gray-300 mb-4">2. Registro dos Pneus</h2>
                 <div className="flex items-center justify-center p-2 mb-4 text-lg font-bold text-center text-indigo-800 bg-indigo-100 rounded-md ring-2 ring-indigo-400">{currentPosition}</div>
@@ -195,10 +198,12 @@ const RegisterVehicle = () => {
                   </div>
                   <div className="flex-grow w-full space-y-3">
                     <input type="file" accept="image/*" onChange={(e) => e.target.files && handleTireFileChange(e.target.files[0])} disabled={!!iaLoading} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100 disabled:opacity-50"/>
-                    <div className="p-3 bg-gray-700/50 rounded-md text-sm">
-                      <p><strong>DOT:</strong> {currentTireData?.dot || 'Aguardando imagem...'}</p>
-                      <p><strong>Marca:</strong> {currentTireData?.brand || 'Aguardando imagem...'}</p>
-                      <p><strong>Condição:</strong> {currentTireData?.condition || 'Aguardando imagem...'}</p>
+                    <div className="p-3 bg-gray-700/50 rounded-md text-sm grid grid-cols-2 gap-x-4 gap-y-2">
+                      <p><strong>DOT:</strong> {currentTireData?.dot || '...'}</p>
+                      <p><strong>Marca:</strong> {currentTireData?.brand || '...'}</p>
+                      <p><strong>Semana:</strong> {currentTireData?.week || '...'}</p>
+                      <p><strong>Ano:</strong> {currentTireData?.year || '...'}</p>
+                      <p className="col-span-2"><strong>Condição:</strong> {currentTireData?.condition || '...'}</p>
                     </div>
                   </div>
                 </div>
@@ -207,6 +212,7 @@ const RegisterVehicle = () => {
                   <button type="button" onClick={() => setCurrentTireIndex(c => Math.min(TIRE_POSITIONS.length - 1, c + 1))} disabled={currentTireIndex === TIRE_POSITIONS.length - 1 || !!iaLoading} className="px-4 py-2 text-sm font-medium bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50">Próximo</button>
                 </div>
             </div>
+
             <div className="flex justify-end pt-5">
               <button type="submit" disabled={!!iaLoading || loading} className="w-full md:w-auto inline-flex justify-center px-8 py-4 text-base font-medium text-white bg-green-600 border border-transparent rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 disabled:bg-gray-500 disabled:cursor-not-allowed">
                 {loading ? 'Cadastrando...' : 'Finalizar Cadastro'}
