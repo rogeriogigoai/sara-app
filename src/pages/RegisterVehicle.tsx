@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Formik, Form, Field } from 'formik';
 import * as Yup from 'yup';
+import imageCompression from 'browser-image-compression';
 import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFunctions, httpsCallable, type HttpsCallableOptions } from 'firebase/functions';
@@ -47,14 +48,32 @@ const RegisterVehicle = () => {
   const [iaLoading, setIaLoading] = useState<'plate' | 'tire' | false>(false);
   const [platePhotoUrl, setPlatePhotoUrl] = useState<string | null>(null);
 
-  // LÓGICA DA PLACA COMPLETA E CORRIGIDA
+  const handleImageCompression = async (file: File) => {
+    const options = {
+      maxSizeMB: 1,
+      maxWidthOrHeight: 1280,
+      useWebWorker: true,
+      initialQuality: 0.7
+    }
+    try {
+      console.log(`Tamanho original: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+      const compressedFile = await imageCompression(file, options);
+      console.log(`Tamanho comprimido: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
+      return compressedFile;
+    } catch (error) {
+      console.error('Erro na compressão:', error);
+      return file; 
+    }
+  }
+
   const handlePlateFileChange = async (file: File, setFieldValue: (field: string, value: any) => void) => {
     setIaLoading('plate');
-    setPlatePhotoUrl(URL.createObjectURL(file));
+    const compressedFile = await handleImageCompression(file);
+    setPlatePhotoUrl(URL.createObjectURL(compressedFile));
     try {
       const options: HttpsCallableOptions = { timeout: 300000 };
       const analyzePlateImage = httpsCallable(functions, 'analyzePlateImage', options);
-      const imageBase64 = await toBase64(file);
+      const imageBase64 = await toBase64(compressedFile);
       const result = await analyzePlateImage({ image: imageBase64 });
       const { plateText } = result.data as { plateText: string };
       if (plateText && plateText !== 'N/A') {
@@ -73,11 +92,12 @@ const RegisterVehicle = () => {
   const handleTireFileChange = async (file: File) => {
     const position = TIRE_POSITIONS[currentTireIndex];
     setIaLoading('tire');
-    setTires(prev => ({ ...prev, [position]: { ...prev[position], file, imageUrl: URL.createObjectURL(file) }}));
+    const compressedFile = await handleImageCompression(file);
+    setTires(prev => ({ ...prev, [position]: { ...prev[position], file: compressedFile, imageUrl: URL.createObjectURL(compressedFile) }}));
     try {
         const options: HttpsCallableOptions = { timeout: 300000 };
         const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', options);
-        const imageBase64 = await toBase64(file);
+        const imageBase64 = await toBase64(compressedFile);
         const result = await analyzeTireImage({ image: imageBase64 });
         const { dot, brand, condition, week, year } = result.data as any;
         setTires(prev => ({ ...prev, [position]: { ...prev[position], dot, brand, condition, week, year } }));

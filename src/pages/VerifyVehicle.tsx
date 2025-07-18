@@ -14,6 +14,7 @@ interface TireData {
     condition: string;
     week: string;
     year: string;
+    imageUrl?: string;
 }
 const TIRE_POSITIONS = ['Dianteiro Esquerdo', 'Dianteiro Direito', 'Traseiro Esquerdo', 'Traseiro Direito', 'Estepe'];
 const toBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -22,6 +23,9 @@ const toBase64 = (file: File): Promise<string> => new Promise((resolve, reject) 
     reader.onload = () => resolve((reader.result as string).split(',')[1]);
     reader.onerror = error => reject(error);
 });
+// (Adicione a biblioteca de compressão que já instalamos)
+import imageCompression from 'browser-image-compression';
+
 
 // --- Componentes de UI ---
 const TireInfoCard = ({ tire, highlight }: { tire: TireData, highlight?: string }) => (
@@ -56,97 +60,99 @@ const VerifyVehicle = () => {
         setLoading(true);
         setError(null);
         setVehicle(null);
-        const finalPlate = normalizePlate(values.plate);
-
         try {
-            const q = query(collection(db, 'vehicles'), where("plate", "==", finalPlate));
-            const querySnapshot = await getDocs(q);
-
-            if (querySnapshot.empty) {
-                setError(`Nenhum veículo encontrado com a placa ${finalPlate}.`);
-            } else {
-                const vehicleDoc = querySnapshot.docs[0];
-                setVehicle({ id: vehicleDoc.id, ...vehicleDoc.data() });
-            }
-        } catch (err) {
-            setError("Ocorreu um erro ao buscar o veículo.");
-        } finally {
-            setLoading(false);
-        }
+            const q = query(collection(db, 'vehicles'), where("plate", "==", normalizePlate(values.plate)));
+            const snapshot = await getDocs(q);
+            if (snapshot.empty) setError("Veículo não encontrado.");
+            else setVehicle({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+        } catch (err) { setError("Erro ao buscar veículo."); }
+        finally { setLoading(false); }
     };
 
     const handleTireScan = async (file: File) => {
         const position = TIRE_POSITIONS[currentTireIndex];
         setIaLoading(true);
         try {
-            const options: HttpsCallableOptions = { timeout: 300000 };
-            const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', options);
-            const imageBase64 = await toBase64(file);
+            const options = { maxSizeMB: 1, maxWidthOrHeight: 1280 };
+            const compressedFile = await imageCompression(file, options);
+            const imageUrl = URL.createObjectURL(compressedFile);
+
+            const callOptions: HttpsCallableOptions = { timeout: 300000 };
+            const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', callOptions);
+            const imageBase64 = await toBase64(compressedFile);
             const result = await analyzeTireImage({ image: imageBase64 });
-            const analysis = result.data as TireData;
-            setScannedTires(prev => ({ ...prev, [position]: { ...analysis, position } }));
-            // Avança para o próximo pneu automaticamente
+            
+            setScannedTires(prev => ({ ...prev, [position]: { ...(result.data as TireData), position, imageUrl } }));
+            
             if (currentTireIndex < TIRE_POSITIONS.length - 1) {
                 setCurrentTireIndex(currentTireIndex + 1);
-            } else {
-                // Último pneu escaneado
             }
         } catch (error) {
-            alert("A IA não conseguiu analisar o pneu. Por favor, tente uma foto mais nítida.");
+            alert("A IA não conseguiu analisar o pneu. Tente novamente.");
         } finally {
             setIaLoading(false);
         }
     };
-
+    
+    // FUNÇÃO CORRIGIDA
     const processVerification = async () => {
         if (!vehicle) return;
         setLoading(true);
+        try {
+            const originalTireKeys = new Set(vehicle.currentTires.map((t: TireData) => `${t.week}-${t.year}`));
+            const originalTirePositions = new Map(vehicle.currentTires.map((t: TireData) => [t.position, `${t.week}-${t.year}`]));
+            
+            let hasFraud = false;
+            let isRotated = false;
+            const changes: any[] = [];
 
-        const originalTireKeys = new Set(vehicle.currentTires.map((t: TireData) => `${t.week}-${t.year}`));
-        const scannedTireKeys = Object.values(scannedTires).map((t: any) => `${t.week}-${t.year}`);
-        
-        let hasFraud = false;
-        const changes = [];
-        
-        for (const scannedTire of Object.values(scannedTires) as TireData[]) {
-            if (!originalTireKeys.has(`${scannedTire.week}-${scannedTire.year}`)) {
-                hasFraud = true;
-                changes.push({ ...scannedTire, status: 'fraud' });
-            } else {
-                changes.push({ ...scannedTire, status: 'ok' });
+            for (const scannedTire of Object.values(scannedTires) as TireData[]) {
+                const scannedKey = `${scannedTire.week}-${scannedTire.year}`;
+                if (!originalTireKeys.has(scannedKey)) {
+                    hasFraud = true;
+                    changes.push({ ...scannedTire, status: 'fraud' });
+                } else {
+                    changes.push({ ...scannedTire, status: 'ok' });
+                    if (originalTirePositions.get(scannedTire.position) !== scannedKey) {
+                        isRotated = true;
+                    }
+                }
             }
-        }
 
-        if (hasFraud) {
-            setVerificationResult({ status: 'fraude', changes });
-            await addDoc(collection(db, "alerts"), {
-                vehicleId: vehicle.id,
-                plate: vehicle.plate,
-                type: "fraude",
-                severity: "critica",
-                status: "pendente",
-                details: {
-                    foundTires: changes,
-                    originalTires: vehicle.currentTires
-                },
-                createdAt: serverTimestamp(),
-                createdBy: user?.uid,
-            });
-        } else if (JSON.stringify(scannedTireKeys.sort()) !== JSON.stringify(Array.from(originalTireKeys).sort())) {
-             // Esta condição é simplista, uma melhor seria verificar as posições
-             setVerificationResult({ status: 'rodizio', changes });
-             const vehicleRef = doc(db, "vehicles", vehicle.id);
-             await updateDoc(vehicleRef, { currentTires: Object.values(scannedTires) });
-        } else {
-            setVerificationResult({ status: 'ok', changes });
+            if (hasFraud) {
+                setVerificationResult({ status: 'fraude', changes });
+                await addDoc(collection(db, "alerts"), {
+                    vehicleId: vehicle.id, plate: vehicle.plate, type: "fraude", severity: "critica", status: "pendente",
+                    details: { foundTires: changes, originalTires: vehicle.currentTires },
+                    createdAt: serverTimestamp(), createdBy: user?.uid,
+                });
+            } else if (isRotated) {
+                setVerificationResult({ status: 'rodizio', changes });
+                const vehicleRef = doc(db, "vehicles", vehicle.id);
+                // Mapeia para remover a URL temporária antes de salvar
+                const newTireData = TIRE_POSITIONS.map(pos => {
+                    const { imageUrl, ...rest } = scannedTires[pos] as any;
+                    return rest;
+                });
+                await updateDoc(vehicleRef, { currentTires: newTireData });
+            } else {
+                setVerificationResult({ status: 'ok', changes });
+            }
+            
+            setVerificationStep('results');
+
+        } catch (err) {
+            console.error("Erro ao processar verificação:", err);
+            alert("Ocorreu um erro ao processar os resultados.");
+        } finally {
+            setLoading(false);
         }
-        
-        setVerificationStep('results');
-        setLoading(false);
     };
 
     // --- RENDERIZAÇÃO ---
-
+    // (O JSX para 'search', 'scanning' e 'results' permanece o mesmo)
+    // ...
+    // Vou incluir o JSX completo para garantir.
     if (verificationStep === 'scanning' && vehicle) {
         const currentPosition = TIRE_POSITIONS[currentTireIndex];
         const isFinished = Object.keys(scannedTires).length === TIRE_POSITIONS.length;
@@ -159,7 +165,6 @@ const VerifyVehicle = () => {
                     <div className="flex items-center justify-center p-2 mb-4 text-lg font-bold text-center text-indigo-800 bg-indigo-100 rounded-md ring-2 ring-indigo-400">
                         {isFinished ? "Verificação Concluída" : `Fotografar: ${currentPosition}`}
                     </div>
-                    {/* UI de Scan */}
                     <div className="flex flex-col items-center">
                         <label htmlFor="tire-scan-upload" className={`w-48 h-48 bg-gray-700 rounded-lg flex items-center justify-center cursor-pointer border-2 border-dashed border-gray-600 ${iaLoading && 'opacity-50 cursor-not-allowed'}`}>
                             {scannedTires[currentPosition]?.imageUrl ? <img src={scannedTires[currentPosition]?.imageUrl} className="w-full h-full object-cover rounded-lg"/> : <span className="text-gray-400">Clique para fotografar</span>}
@@ -167,7 +172,6 @@ const VerifyVehicle = () => {
                         </label>
                         {iaLoading && <p className="mt-2 text-blue-400">Analisando...</p>}
                     </div>
-                     {/* Lista de Pneus Escaneados */}
                     <div className="mt-6">
                         <h3 className="text-lg font-semibold mb-2">Pneus Verificados:</h3>
                         <div className="grid grid-cols-5 gap-2 text-center">
@@ -178,7 +182,6 @@ const VerifyVehicle = () => {
                             ))}
                         </div>
                     </div>
-
                     {isFinished && (
                         <div className="mt-8 text-center">
                             <button onClick={processVerification} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-8 rounded-lg text-lg">
@@ -217,7 +220,6 @@ const VerifyVehicle = () => {
          )
     }
 
-    // --- RENDERIZAÇÃO DA BUSCA ---
     return (
         <div className="text-white">
             <h1 className="text-3xl font-bold">Verificar Veículo</h1>
