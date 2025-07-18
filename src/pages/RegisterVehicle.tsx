@@ -3,9 +3,9 @@ import { Formik, Form, Field } from 'formik';
 import * as Yup from 'yup';
 import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFunctions, httpsCallable, type HttpsCallableOptions } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext'; // A LINHA QUE FALTAVA
 
 // --- Ícones ---
 const CameraIcon = () => (
@@ -48,48 +48,54 @@ const RegisterVehicle = () => {
   const [iaLoading, setIaLoading] = useState<'plate' | 'tire' | false>(false);
   const [platePhotoUrl, setPlatePhotoUrl] = useState<string | null>(null);
 
-  // --- Funções de Análise de Imagem ---
   const handlePlateFileChange = async (file: File, setFieldValue: (field: string, value: any) => void) => {
     setIaLoading('plate');
     setPlatePhotoUrl(URL.createObjectURL(file));
     try {
-      const analyzePlateImage = httpsCallable(functions, 'analyzePlateImage');
+      const options: HttpsCallableOptions = { timeout: 300000 };
+      const analyzePlateImage = httpsCallable(functions, 'analyzePlateImage', options);
       const imageBase64 = await toBase64(file);
       const result = await analyzePlateImage({ image: imageBase64 });
       const { plateText } = result.data as { plateText: string };
+
+      console.log("Sucesso! Resposta da IA:", result.data);
+
       if (plateText && plateText !== 'N/A') {
         setFieldValue('plate', plateText.toUpperCase());
       } else {
         alert('Não foi possível ler a placa. Por favor, digite manualmente ou tente outra foto.');
       }
     } catch (error) {
-      console.error("Erro ao analisar a imagem da placa:", error);
-      alert("Ocorreu um erro ao processar a imagem da placa.");
+      console.error("--- ERRO DETALHADO DO FIREBASE (CLIENT-SIDE) ---");
+      console.error(error);
+      console.error("-------------------------------------------------");
+      alert("Ocorreu um erro ao processar a imagem. Abra o console do navegador (F12) para ver os detalhes do erro.");
     } finally {
       setIaLoading(false);
     }
   };
-
+  
   const handleTireFileChange = async (file: File) => {
     const position = TIRE_POSITIONS[currentTireIndex];
     setIaLoading('tire');
     setTires(prev => ({ ...prev, [position]: { ...prev[position], file, imageUrl: URL.createObjectURL(file) }}));
     try {
-      const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage');
+      const options: HttpsCallableOptions = { timeout: 300000 };
+      const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage', options);
       const imageBase64 = await toBase64(file);
       const result = await analyzeTireImage({ image: imageBase64 });
       const { dot, brand, condition } = result.data as { dot: string; brand: string; condition: string; };
       setTires(prev => ({ ...prev, [position]: { ...prev[position], dot, brand, condition } }));
     } catch (error) {
-      console.error("Erro ao chamar a função da IA:", error);
-      alert("A IA não conseguiu analisar o pneu. Por favor, tente uma foto mais nítida.");
+      console.error("--- ERRO DETALHADO DO FIREBASE (PNEU) ---");
+      console.error(error);
+      alert("A IA não conseguiu analisar o pneu. Abra o console do navegador (F12) para ver os detalhes.");
       setTires(prev => ({ ...prev, [position]: { ...prev[position], dot: 'Erro', brand: 'Erro', condition: 'Erro' } }));
     } finally {
       setIaLoading(false);
     }
   };
 
-  // --- Submissão do Formulário ---
   const validationSchema = Yup.object({
     plate: Yup.string().matches(/^[A-Z]{3}[0-9][A-Z][0-9]{2}$|^[A-Z]{3}[0-9]{4}$/, 'Formato de placa inválido').required('A placa é obrigatória'),
   });
@@ -151,7 +157,6 @@ const RegisterVehicle = () => {
       >
         {({ setFieldValue, errors, touched }) => (
           <Form className="mt-8 space-y-8">
-            {/* --- Passo 1: Placa --- */}
             <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
               <h2 className="text-xl font-semibold text-gray-300 mb-4">1. Identificação do Veículo</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
@@ -180,8 +185,6 @@ const RegisterVehicle = () => {
                 </div>
               </div>
             </div>
-
-            {/* --- Passo 2: Pneus --- */}
             <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
               <h2 className="text-xl font-semibold text-gray-300 mb-4">2. Registro dos Pneus</h2>
                 <div className="flex items-center justify-center p-2 mb-4 text-lg font-bold text-center text-indigo-800 bg-indigo-100 rounded-md ring-2 ring-indigo-400">{currentPosition}</div>
@@ -204,7 +207,6 @@ const RegisterVehicle = () => {
                   <button type="button" onClick={() => setCurrentTireIndex(c => Math.min(TIRE_POSITIONS.length - 1, c + 1))} disabled={currentTireIndex === TIRE_POSITIONS.length - 1 || !!iaLoading} className="px-4 py-2 text-sm font-medium bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50">Próximo</button>
                 </div>
             </div>
-
             <div className="flex justify-end pt-5">
               <button type="submit" disabled={!!iaLoading || loading} className="w-full md:w-auto inline-flex justify-center px-8 py-4 text-base font-medium text-white bg-green-600 border border-transparent rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 disabled:bg-gray-500 disabled:cursor-not-allowed">
                 {loading ? 'Cadastrando...' : 'Finalizar Cadastro'}
