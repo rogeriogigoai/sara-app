@@ -3,21 +3,21 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface ProtectedRouteProps {
   children: JSX.Element;
-  allowedRoles: string[];
+  requiredPermission: number; // Agora requer um nível de permissão
 }
 
-const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
-  const { role, loading } = useAuth();
+const ProtectedRoute = ({ children, requiredPermission }: ProtectedRouteProps) => {
+  const { permissionLevel, loading } = useAuth();
 
   if (loading) {
     return <div>Carregando...</div>;
   }
 
-  // Se o usuário tem um perfil permitido, renderiza a página.
-  // Caso contrário, redireciona para a página inicial (Dashboard).
-  if (role && allowedRoles.includes(role)) {
+  // Verifica se o nível de permissão do usuário é igual ou superior ao necessário
+  if (permissionLevel !== null && permissionLevel >= requiredPermission) {
     return children;
   } else {
+    // Se não tiver permissão, redireciona para o Dashboard
     return <Navigate to="/" replace />;
   }
 };

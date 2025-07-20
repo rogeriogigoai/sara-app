@@ -1,47 +1,43 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-// A correção crucial está aqui: "type User" em vez de apenas "User"
 import { getAuth, type User } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  role: string | null;
+  permissionLevel: number | null; // Mudou de 'role' para 'permissionLevel'
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
-  role: null,
+  permissionLevel: null,
 });
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const auth = getAuth();
   const db = getFirestore();
   const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<string | null>(null);
+  const [permissionLevel, setPermissionLevel] = useState<number | null>(null); // Estado atualizado
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (user) => {
       setLoading(true);
       if (user) {
-        // Usuário logado. Vamos buscar o perfil dele no Firestore.
         const userDocRef = doc(db, 'users', user.uid);
         const userDoc = await getDoc(userDocRef);
         
         if (userDoc.exists()) {
-          // Se o documento do usuário existe, pegamos o perfil.
-          setRole(userDoc.data().role);
+          // Agora busca pelo campo 'permission' e define como 0 se não existir
+          setPermissionLevel(userDoc.data().permission || 0); 
         } else {
-          // Se não existir, definimos como 'user' padrão.
-          setRole('user');
+          setPermissionLevel(0); // Nível de permissão mais baixo
         }
         setUser(user);
       } else {
-        // Usuário deslogado.
         setUser(null);
-        setRole(null);
+        setPermissionLevel(null);
       }
       setLoading(false);
     });
@@ -49,7 +45,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => unsubscribe();
   }, [auth, db]);
 
-  const value = { user, loading, role };
+  const value = { user, loading, permissionLevel };
 
   return <AuthContext.Provider value={value}>{!loading && children}</AuthContext.Provider>;
 };

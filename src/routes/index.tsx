@@ -8,7 +8,9 @@ import Dashboard from '../pages/Dashboard';
 import RegisterVehicle from '../pages/RegisterVehicle';
 import VerifyVehicle from '../pages/VerifyVehicle';
 import ViewAlerts from '../pages/ViewAlerts';
-import AlertDetail from '../pages/AlertDetail'; // Importado
+import AlertDetail from '../pages/AlertDetail';
+import ManageUsers from '../pages/ManageUsers';
+import UserProfile from '../pages/UserProfile'; // Importado
 
 const AppLayout = () => (
   <MainLayout>
@@ -17,7 +19,7 @@ const AppLayout = () => (
 );
 
 const AppRoutes = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, permissionLevel } = useAuth();
 
   if (loading) {
     return (
@@ -34,39 +36,13 @@ const AppRoutes = () => {
         
         <Route element={user ? <AppLayout /> : <Navigate to="/login" />}>
           <Route path="/" element={<Dashboard />} />
-          <Route 
-            path="/register-vehicle" 
-            element={
-              <ProtectedRoute allowedRoles={['admin', 'operator']}>
-                <RegisterVehicle />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/verify-vehicle" 
-            element={
-              <ProtectedRoute allowedRoles={['admin', 'operator', 'auditor']}>
-                <VerifyVehicle />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/view-alerts" 
-            element={
-              <ProtectedRoute allowedRoles={['admin', 'operator', 'user', 'auditor']}>
-                <ViewAlerts />
-              </ProtectedRoute>
-            } 
-          />
-          {/* NOVA ROTA DINÂMICA ADICIONADA AQUI */}
-          <Route 
-            path="/alert/:alertId" 
-            element={
-              <ProtectedRoute allowedRoles={['admin', 'operator', 'user']}>
-                <AlertDetail />
-              </ProtectedRoute>
-            } 
-          />
+          <Route path="/register-vehicle" element={ <ProtectedRoute requiredPermission={2}><RegisterVehicle /></ProtectedRoute> } />
+          <Route path="/verify-vehicle" element={ <ProtectedRoute requiredPermission={2}><VerifyVehicle /></ProtectedRoute> } />
+          <Route path="/view-alerts" element={ <ProtectedRoute requiredPermission={1}><ViewAlerts /></ProtectedRoute> } />
+          <Route path="/alert/:alertId" element={ <ProtectedRoute requiredPermission={1}><AlertDetail /></ProtectedRoute> } />
+          <Route path="/manage-users" element={ <ProtectedRoute requiredPermission={5}><ManageUsers /></ProtectedRoute> } />
+          {/* NOVA ROTA ADICIONADA AQUI */}
+          <Route path="/profile" element={ <ProtectedRoute requiredPermission={1}><UserProfile /></ProtectedRoute> } />
         </Route>
 
         <Route path="*" element={<Navigate to={user ? "/" : "/login"} />} />

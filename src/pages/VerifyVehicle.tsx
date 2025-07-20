@@ -129,72 +129,149 @@ const VerifyVehicle = () => {
         }
     };
     
-    const processValidation = async () => { /* ... (código existente) ... */ };
-    const handleFinalUpdate = async () => { /* ... (código existente) ... */ };
+    const processValidation = async () => {
+        if (!vehicle) return;
+        setLoading(true);
+        try {
+            const originalTireKeys = new Set(vehicle.currentTires.map((t: TireData) => `${t.week}-${t.year}`));
+            const scannedTireKeys = new Set(Object.values(scannedTires).map((t: any) => `${t.week}-${t.year}`));
+            const hasFraud = originalTireKeys.size !== scannedTireKeys.size || ![...originalTireKeys].every(key => scannedTireKeys.has(key));
+            let isRotated = false;
+            if (!hasFraud) {
+                for (const position of TIRE_POSITIONS) {
+                    const originalTire = vehicle.currentTires.find((t: TireData) => t.position === position);
+                    const scannedTire = scannedTires[position];
+                    if (originalTire && scannedTire && `${originalTire.week}-${originalTire.year}` !== `${scannedTire.week}-${scannedTire.year}`) {
+                        isRotated = true;
+                        break;
+                    }
+                }
+            }
+
+            const changes = TIRE_POSITIONS.map(position => {
+                const scannedTire = scannedTires[position] as TireData;
+                const scannedKey = `${scannedTire.week}-${scannedTire.year}`;
+                return { ...scannedTire, status: originalTireKeys.has(scannedKey) ? 'ok' : 'fraud' };
+            });
+
+            const resultStatus = hasFraud ? 'fraude' : (isRotated ? 'rodizio' : 'ok');
+            setValidationResult({ status: resultStatus, changes });
+
+            const cleanFoundTires = changes.map(({ file, ...rest }) => rest);
+            if (hasFraud) {
+                await addDoc(collection(db, "alerts"), {
+                    vehicleId: vehicle.id, plate: vehicle.plate, type: "fraude", severity: "critica", status: "pendente",
+                    details: { foundTires: cleanFoundTires, originalTires: vehicle.currentTires },
+                    createdAt: serverTimestamp(), createdBy: user?.uid,
+                });
+            } else if (isRotated) {
+                await addDoc(collection(db, "alerts"), {
+                    vehicleId: vehicle.id, plate: vehicle.plate, type: "rodizio", severity: "informativo", status: "resolvido",
+                    details: { foundTires: cleanFoundTires, originalTires: vehicle.currentTires, message: "Rodízio detectado e posições atualizadas." },
+                    createdAt: serverTimestamp(), createdBy: user?.uid,
+                });
+                const vehicleRef = doc(db, "vehicles", vehicle.id);
+                await updateDoc(vehicleRef, { currentTires: cleanFoundTires });
+            }
+            
+            setStep('validation_results');
+        } catch (err) {
+            console.error("Erro ao processar validação:", err);
+            alert("Erro ao processar validação. Verifique o console.");
+        } finally {
+            setLoading(false);
+        }
+    };
+    
+    const handleFinalUpdate = async () => {
+        if (!vehicle || Object.values(newTires).length < TIRE_POSITIONS.length) {
+            alert("É necessário escanear todos os 5 pneus novos."); return;
+        }
+        setLoading(true);
+        try {
+            const tiresToSave = await Promise.all(
+                TIRE_POSITIONS.map(async (pos) => {
+                    const tire = newTires[pos] as TireData;
+                    if (!tire.file) throw new Error(`Arquivo faltando para o pneu ${pos}`);
+                    const storageRef = ref(storage, `tires/${vehicle.plate}/${pos}_${Date.now()}`);
+                    const snapshot = await uploadBytes(storageRef, tire.file);
+                    const downloadURL = await getDownloadURL(snapshot.ref);
+                    return { position: pos, week: tire.week, year: tire.year, dot: tire.dot, brand: tire.brand, condition: tire.condition, imageUrl: downloadURL };
+                })
+            );
+            await updateDoc(doc(db, "vehicles", vehicle.id), { currentTires: tiresToSave });
+            alert("Veículo atualizado com sucesso!");
+            navigate("/");
+        } catch (err) { console.error(err); alert("Erro ao atualizar o veículo. Verifique o console."); }
+        finally { setLoading(false); }
+    };
+
+    const renderSearch = () => (
+        <div>
+            <Formik
+                initialValues={{ plate: new URLSearchParams(location.search).get('plate') || '' }}
+                validationSchema={Yup.object({ plate: Yup.string().required('A placa é obrigatória') })}
+                onSubmit={handleSearch}
+                enableReinitialize
+            >
+                <Form className="mt-8 flex items-start gap-4">
+                    <Field name="plate" className="w-full bg-gray-700 border border-gray-600 rounded-md p-3 text-white focus:ring-2 focus:ring-blue-500 uppercase" placeholder="Digite a placa..."/>
+                    <button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md">{loading ? 'Buscando...' : 'Buscar'}</button>
+                </Form>
+            </Formik>
+            <div className="mt-10">
+                {loading && <p className="text-center">Carregando dados do veículo...</p>}
+                {error && <p className="text-center text-red-400">{error}</p>}
+                {vehicle && !loading && (
+                    <div className="bg-gray-800 p-6 rounded-lg animate-fade-in">
+                        <h2 className="text-2xl font-bold text-green-400">Veículo Encontrado: {vehicle.plate}</h2>
+                        <div className="mt-6">
+                            <h3 className="text-lg font-semibold mb-4">Pneus Registrados Atualmente:</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {vehicle.currentTires.map((tire: any) => (<TireInfoCard key={tire.position} tire={tire} />))}
+                            </div>
+                        </div>
+                        <div className="mt-8 text-center">
+                            <button onClick={() => setStep('validation_scanning')} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-8 rounded-lg text-lg">
+                                Iniciar Etapa 1: Validar Pneus
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const renderValidationResults = () => (
+        <div>
+            <h1 className="text-3xl font-bold">Resultados da Validação</h1>
+            <div className={`mt-4 p-4 rounded-lg text-center font-bold text-lg ${validationResult.status === 'fraude' ? 'bg-red-500/20 text-red-400' : validationResult.status === 'rodizio' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+                {validationResult.status === 'fraude' && 'ALERTA DE FRAUDE DETECTADO!'}
+                {validationResult.status === 'rodizio' && 'Rodízio Detectado! As posições foram atualizadas e um alerta informativo foi gerado.'}
+                {validationResult.status === 'ok' && 'VALIDAÇÃO OK! Todos os pneus estão corretos e nas posições originais.'}
+            </div>
+            <div className="mt-6">
+                <h3 className="text-lg font-semibold mb-4">Pneus Encontrados:</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {validationResult.changes.map((tire: any) => <TireInfoCard key={tire.position} tire={tire} highlight={tire.status} />)}
+                </div>
+            </div>
+            <div className="mt-8 flex gap-4">
+                <button onClick={() => { setStep('search'); setVehicle(null); }} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">Verificar Outro Veículo</button>
+                {validationResult.status !== 'fraude' && (
+                    <button onClick={() => { setNewTires({}); setStep('update_scanning'); }} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Prosseguir para Etapa 2: Registrar Pneus Novos</button>
+                )}
+            </div>
+        </div>
+    );
 
     const renderStep = () => {
         switch (step) {
             case 'validation_scanning': return <ScanInterface title={`Etapa 1: Validar Pneus de ${vehicle?.plate}`} onScan={(file: File, index: number) => handleScan(file, index, setScannedTires)} onFinish={processValidation} loading={loading} scannedData={scannedTires} iaLoading={iaLoading} />;
             case 'update_scanning': return <ScanInterface title={`Etapa 2: Registrar Pneus Novos de ${vehicle?.plate}`} onScan={(file: File, index: number) => handleScan(file, index, setNewTires)} onFinish={handleFinalUpdate} loading={loading} scannedData={newTires} iaLoading={iaLoading} />;
-            case 'validation_results': return (
-                <div>
-                    <h1 className="text-3xl font-bold">Resultados da Validação</h1>
-                    <div className={`mt-4 p-4 rounded-lg text-center font-bold text-lg ${validationResult.status === 'fraude' ? 'bg-red-500/20 text-red-400' : validationResult.status === 'rodizio' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
-                        {validationResult.status === 'fraude' && 'ALERTA DE FRAUDE DETECTADO!'}
-                        {validationResult.status === 'rodizio' && 'Rodízio Detectado! As posições foram atualizadas e um alerta informativo foi gerado.'}
-                        {validationResult.status === 'ok' && 'VALIDAÇÃO OK! Todos os pneus estão corretos e nas posições originais.'}
-                    </div>
-                    <div className="mt-6">
-                        <h3 className="text-lg font-semibold mb-4">Pneus Encontrados:</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {validationResult.changes.map((tire: any) => <TireInfoCard key={tire.position} tire={tire} highlight={tire.status} />)}
-                        </div>
-                    </div>
-                    <div className="mt-8 flex gap-4">
-                        <button onClick={() => { setStep('search'); setVehicle(null); }} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">Verificar Outro Veículo</button>
-                        {validationResult.status !== 'fraude' && (
-                            <button onClick={() => { setNewTires({}); setStep('update_scanning'); }} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Prosseguir para Etapa 2: Registrar Pneus Novos</button>
-                        )}
-                    </div>
-                </div>
-            );
+            case 'validation_results': return renderValidationResults();
             case 'search':
-            default:
-                return (
-                    <div>
-                        <Formik
-                            initialValues={{ plate: new URLSearchParams(location.search).get('plate') || '' }}
-                            validationSchema={Yup.object({ plate: Yup.string().required('A placa é obrigatória') })}
-                            onSubmit={handleSearch}
-                            enableReinitialize
-                        >
-                            <Form className="mt-8 flex items-start gap-4">
-                                <Field name="plate" className="w-full bg-gray-700 border border-gray-600 rounded-md p-3 text-white focus:ring-2 focus:ring-blue-500 uppercase" placeholder="Digite a placa..."/>
-                                <button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md">{loading ? 'Buscando...' : 'Buscar'}</button>
-                            </Form>
-                        </Formik>
-                        <div className="mt-10">
-                            {loading && <p className="text-center">Carregando dados do veículo...</p>}
-                            {error && <p className="text-center text-red-400">{error}</p>}
-                            {vehicle && !loading && (
-                                <div className="bg-gray-800 p-6 rounded-lg animate-fade-in">
-                                    <h2 className="text-2xl font-bold text-green-400">Veículo Encontrado: {vehicle.plate}</h2>
-                                    <div className="mt-6">
-                                        <h3 className="text-lg font-semibold mb-4">Pneus Registrados Atualmente:</h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                            {vehicle.currentTires.map((tire: any) => (<TireInfoCard key={tire.position} tire={tire} />))}
-                                        </div>
-                                    </div>
-                                    <div className="mt-8 text-center">
-                                        <button onClick={() => setStep('validation_scanning')} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-8 rounded-lg text-lg">
-                                            Iniciar Etapa 1: Validar Pneus
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                );
+            default: return renderSearch();
         }
     };
     
