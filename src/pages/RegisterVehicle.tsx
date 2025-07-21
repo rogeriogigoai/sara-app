@@ -89,10 +89,31 @@ const RegisterVehicle = () => {
     };
 
     const handleSubmit = async (values: { plate: string }) => {
-        // ... (lógica de submit, que já está correta)
+        if (Object.values(tires).filter(t => t && t.file).length !== TIRE_POSITIONS.length) {
+            alert('Por favor, cadastre as imagens de todos os 5 pneus.'); return;
+        }
+        setLoading(true);
+        const finalPlate = normalizePlate(values.plate);
+        try {
+            const tiresToSave = await Promise.all(
+                TIRE_POSITIONS.map(async (pos) => {
+                    const tire = tires[pos] as TireData;
+                    if (!tire.file) throw new Error(`Arquivo faltando para o pneu ${pos}`);
+                    const storageRef = ref(storage, `tires/${finalPlate}/${pos}_${Date.now()}`);
+                    const snapshot = await uploadBytes(storageRef, tire.file);
+                    const downloadURL = await getDownloadURL(snapshot.ref);
+                    return { position: pos, week: tire.week, year: tire.year, dot: tire.dot, brand: tire.brand, condition: tire.condition, imageUrl: downloadURL };
+                })
+            );
+            await addDoc(collection(db, 'vehicles'), {
+                plate: finalPlate, createdAt: serverTimestamp(), createdBy: user?.uid, currentTires: tiresToSave,
+            });
+            alert('Veículo cadastrado com sucesso!');
+            navigate('/');
+        } catch (error) { console.error("Erro ao cadastrar veículo:", error); alert('Ocorreu um erro ao cadastrar.'); }
+        finally { setLoading(false); }
     };
 
-    // --- JSX COMPLETO E CORRETO ABAIXO ---
     const currentPosition = TIRE_POSITIONS[currentTireIndex];
     const currentTireData = tires[currentPosition];
     const areAllTiresScanned = Object.values(tires).filter(t => t && t.file).length === TIRE_POSITIONS.length;
