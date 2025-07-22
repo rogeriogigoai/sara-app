@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Formik, Form, Field } from 'formik';
+import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
 import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -24,23 +24,11 @@ const RegisterVehicle = () => {
     const db = getFirestore();
     const storage = getStorage();
     const navigate = useNavigate();
-    const [tires, setTires] = useState<Record<string, Partial<TireData>>>({});
-    const [currentTireIndex, setCurrentTireIndex] = useState(0);
     const [loading, setLoading] = useState(false);
     const [iaLoading, setIaLoading] = useState<'plate' | 'tire' | false>(false);
     const [platePhotoUrl, setPlatePhotoUrl] = useState<string | null>(null);
-
-    const validationSchema = Yup.object({
-        plate: Yup.string().transform(val => normalizePlate(val)).min(7, 'A placa deve ter 7 caracteres').required('A placa é obrigatória')
-            .test('is-unique', 'Esta placa já está cadastrada.', async (value) => {
-                if (!value || value.length !== 7) return true;
-                try {
-                    const q = query(collection(db, "vehicles"), where("plate", "==", value));
-                    const querySnapshot = await getDocs(q);
-                    return querySnapshot.empty;
-                } catch { return false; }
-            }),
-    });
+    const [tireFiles, setTireFiles] = useState<Record<string, File>>({});
+    const [currentTireIndex, setCurrentTireIndex] = useState(0);
 
     const callAnalysisFunction = async (functionName: string, imageBase64: string) => {
         const auth = getAuth();
@@ -75,56 +63,95 @@ const RegisterVehicle = () => {
         finally { setIaLoading(false); }
     };
     
-    const handleTireFileChange = async (file: File) => {
+    const handleTireFileChange = async (file: File, formikHelpers: any) => {
         const position = TIRE_POSITIONS[currentTireIndex];
         setIaLoading('tire');
         try {
             const compressedFile = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1280 });
-            setTires(prev => ({ ...prev, [position]: { ...prev[position], file: compressedFile, imageUrl: URL.createObjectURL(compressedFile) }}));
+            setTireFiles(prev => ({ ...prev, [position]: compressedFile }));
+            const imageUrl = URL.createObjectURL(compressedFile);
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].imageUrl`, imageUrl);
             const imageBase64 = await toBase64(compressedFile);
             const result = await callAnalysisFunction('analyzeTireImage', imageBase64);
-            setTires(prev => ({ ...prev, [position]: { ...prev[position], ...result } }));
-        } catch (error) { console.error("--- ERRO DETALHADO (PNEU) ---", error); alert("A IA não conseguiu analisar o pneu. Verifique o console."); }
-        finally { setIaLoading(false); }
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].dot`, result.dot || 'N/A');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].brand`, result.brand || 'N/A');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].week`, result.week || '');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].year`, result.year || '');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].condition`, result.condition || 'Bom');
+        } catch (error) { 
+            console.error("--- ERRO DETALHADO (PNEU) ---", error); 
+            alert("A IA não conseguiu analisar o pneu. Por favor, preencha os dados manualmente.");
+        } finally {
+            setIaLoading(false);
+        }
     };
 
-    const handleSubmit = async (values: { plate: string }) => {
-        if (Object.values(tires).filter(t => t && t.file).length !== TIRE_POSITIONS.length) {
-            alert('Por favor, cadastre as imagens de todos os 5 pneus.'); return;
-        }
+    const handleSubmit = async (values: any) => {
         setLoading(true);
         const finalPlate = normalizePlate(values.plate);
         try {
             const tiresToSave = await Promise.all(
-                TIRE_POSITIONS.map(async (pos) => {
-                    const tire = tires[pos] as TireData;
-                    if (!tire.file) throw new Error(`Arquivo faltando para o pneu ${pos}`);
-                    const storageRef = ref(storage, `tires/${finalPlate}/${pos}_${Date.now()}`);
-                    const snapshot = await uploadBytes(storageRef, tire.file);
+                values.tires.map(async (tire: any) => {
+                    const tireFile = tireFiles[tire.position];
+                    if (!tireFile) throw new Error(`Arquivo de imagem faltando para o pneu ${tire.position}`);
+                    const storageRef = ref(storage, `tires/${finalPlate}/${tire.position}_${Date.now()}`);
+                    const snapshot = await uploadBytes(storageRef, tireFile);
                     const downloadURL = await getDownloadURL(snapshot.ref);
-                    return { position: pos, week: tire.week, year: tire.year, dot: tire.dot, brand: tire.brand, condition: tire.condition, imageUrl: downloadURL };
+                    return { ...tire, imageUrl: downloadURL };
                 })
             );
             await addDoc(collection(db, 'vehicles'), {
-                plate: finalPlate, createdAt: serverTimestamp(), createdBy: user?.uid, currentTires: tiresToSave,
+                plate: finalPlate,
+                createdAt: serverTimestamp(),
+                createdBy: user?.uid,
+                currentTires: tiresToSave,
             });
             alert('Veículo cadastrado com sucesso!');
             navigate('/');
-        } catch (error) { console.error("Erro ao cadastrar veículo:", error); alert('Ocorreu um erro ao cadastrar.'); }
-        finally { setLoading(false); }
+        } catch (error) {
+            console.error("Erro ao cadastrar veículo:", error);
+            alert('Ocorreu um erro ao cadastrar.');
+        } finally {
+            setLoading(false);
+        }
     };
-
-    const currentPosition = TIRE_POSITIONS[currentTireIndex];
-    const currentTireData = tires[currentPosition];
-    const areAllTiresScanned = Object.values(tires).filter(t => t && t.file).length === TIRE_POSITIONS.length;
 
     return (
         <div className="text-white">
             <h1 className="text-3xl font-bold">Cadastrar Novo Veículo</h1>
             <p className="text-gray-400 mt-2">Siga os passos para registrar um veículo e seus 5 pneus na frota.</p>
-            <Formik initialValues={{ plate: '' }} validationSchema={validationSchema} onSubmit={handleSubmit} validateOnBlur>
-                {({ setFieldValue, errors, touched, validateField, values }) => {
+            <Formik
+                initialValues={{
+                    plate: '',
+                    tires: TIRE_POSITIONS.map(pos => ({
+                        position: pos, dot: '', brand: '', week: '', year: '', condition: 'Bom', imageUrl: ''
+                    }))
+                }}
+                validationSchema={Yup.object({
+                    plate: Yup.string().transform(val => normalizePlate(val)).min(7, 'A placa é obrigatória e deve ter 7 caracteres.').required('A placa é obrigatória')
+                        .test('is-unique', 'Esta placa já está cadastrada.', async (value) => {
+                            if (!value || value.length !== 7) return true;
+                            try {
+                                const q = query(collection(db, "vehicles"), where("plate", "==", value));
+                                const querySnapshot = await getDocs(q);
+                                return querySnapshot.empty;
+                            } catch { return false; }
+                        }),
+                    tires: Yup.array().of(
+                        Yup.object().shape({
+                            week: Yup.string().matches(/^[0-9]{2}$/, 'Semana inválida (WW)').required('Obrigatório'),
+                            year: Yup.string().matches(/^[0-9]{2}$/, 'Ano inválido (YY)').required('Obrigatório'),
+                        })
+                    )
+                })}
+                onSubmit={handleSubmit}
+            >
+                {(formikProps) => {
+                    const { values, setFieldValue, errors, touched, validateField } = formikProps;
+                    const currentTireData = values.tires[currentTireIndex];
                     const isPlateValidForNextStep = !errors.plate && normalizePlate(values.plate).length === 7;
+                    const areAllTiresRegistered = values.tires.every(t => t.week && t.year && tireFiles[t.position]);
+
                     return (
                         <Form className="mt-8 space-y-8">
                             <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
@@ -150,43 +177,42 @@ const RegisterVehicle = () => {
                                     </div>
                                 </div>
                             </div>
+
                             <div className={`bg-gray-800 p-6 rounded-lg shadow-lg transition-opacity duration-500 ${!isPlateValidForNextStep ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}`}>
                                 <h2 className="text-xl font-semibold text-gray-300 mb-4">2. Registro dos Pneus</h2>
                                 {!isPlateValidForNextStep ? (
-                                    <div className="text-center text-gray-500 py-10">
-                                        <p>Por favor, insira uma placa de veículo válida e única para continuar.</p>
-                                    </div>
+                                    <div className="text-center text-gray-500 py-10"><p>Por favor, insira uma placa de veículo válida e única para continuar.</p></div>
                                 ) : (
                                     <div>
-                                        <div className="flex items-center justify-center p-2 mb-4 text-lg font-bold text-center text-indigo-800 bg-indigo-100 rounded-md ring-2 ring-indigo-400">{currentPosition}</div>
-                                        <div className="flex flex-col items-center p-4 border-2 border-dashed border-gray-600 rounded-lg md:flex-row md:space-x-6">
-                                            <div className="relative flex-shrink-0 w-48 h-48 mb-4 bg-gray-700 rounded-lg md:mb-0">
-                                                {currentTireData?.imageUrl && <img src={currentTireData.imageUrl} alt="Pneu" className="object-cover w-full h-full rounded-lg" />}
-                                                {iaLoading === 'tire' && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 rounded-lg"><div className="w-8 h-8 border-4 border-white rounded-full border-t-transparent animate-spin"></div></div>}
-                                            </div>
-                                            <div className="flex-grow w-full space-y-3">
-                                                <input type="file" accept="image/*" onChange={(e) => e.target.files && handleTireFileChange(e.target.files[0])} disabled={!!iaLoading} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100 disabled:opacity-50"/>
-                                                <div className="p-3 bg-gray-700/50 rounded-md text-sm grid grid-cols-2 gap-x-4 gap-y-2">
-                                                    <p><strong>DOT:</strong> {currentTireData?.dot || '...'}</p>
-                                                    <p><strong>Marca:</strong> {currentTireData?.brand || '...'}</p>
-                                                    <p><strong>Semana:</strong> {currentTireData?.week || '...'}</p>
-                                                    <p><strong>Ano:</strong> {currentTireData?.year || '...'}</p>
-                                                    <p className="col-span-2"><strong>Condição:</strong> {currentTireData?.condition || '...'}</p>
+                                        <div className="flex items-center justify-center p-2 mb-4 text-lg font-bold text-center text-indigo-800 bg-indigo-100 rounded-md ring-2 ring-indigo-400">{TIRE_POSITIONS[currentTireIndex]}</div>
+                                        <div className="flex flex-col md:flex-row gap-6 items-start">
+                                            <div className="flex-shrink-0 flex flex-col items-center">
+                                                <div className="relative w-48 h-48 bg-gray-700 rounded-lg flex items-center justify-center">
+                                                    {currentTireData.imageUrl ? <img src={currentTireData.imageUrl} alt="Pneu" className="w-full h-full object-cover rounded-lg"/> : <span className="text-gray-400 text-center px-2">Clique abaixo para fotografar</span>}
+                                                    {iaLoading === 'tire' && <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center"><div className="w-8 h-8 border-4 border-white rounded-full border-t-transparent animate-spin"></div></div>}
                                                 </div>
+                                                <input key={currentTireIndex} id="tire-photo-upload" type="file" className="hidden" disabled={iaLoading} onChange={(e) => e.target.files && handleTireFileChange(e.target.files[0], formikProps)} />
+                                                <label htmlFor="tire-photo-upload" className={`mt-2 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-md transition-colors ${iaLoading ? 'opacity-50' : ''}`}><CameraIcon /></label>
+                                            </div>
+                                            <div className="flex-grow grid grid-cols-2 gap-4">
+                                                <div><label>DOT</label><Field name={`tires[${currentTireIndex}].dot`} className="w-full bg-gray-700 p-2 rounded mt-1"/></div>
+                                                <div><label>Marca</label><Field name={`tires[${currentTireIndex}].brand`} className="w-full bg-gray-700 p-2 rounded mt-1"/></div>
+                                                <div><label>Semana (WW)</label><Field name={`tires[${currentTireIndex}].week`} className="w-full bg-gray-700 p-2 rounded mt-1"/><ErrorMessage name={`tires[${currentTireIndex}].week`} component="div" className="text-red-400 text-xs"/></div>
+                                                <div><label>Ano (YY)</label><Field name={`tires[${currentTireIndex}].year`} className="w-full bg-gray-700 p-2 rounded mt-1"/><ErrorMessage name={`tires[${currentTireIndex}].year`} component="div" className="text-red-400 text-xs"/></div>
+                                                <div className="col-span-2"><label>Condição</label><Field as="select" name={`tires[${currentTireIndex}].condition`} className="w-full bg-gray-700 p-2 rounded mt-1"><option>Bom</option><option>Novo</option><option>Desgastado</option><option>Danificado</option></Field></div>
                                             </div>
                                         </div>
                                         <div className="flex justify-between mt-4">
-                                            <button type="button" onClick={() => setCurrentTireIndex(c => Math.max(0, c - 1))} disabled={currentTireIndex === 0 || !!iaLoading} className="px-4 py-2 text-sm font-medium bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50">Anterior</button>
-                                            <button type="button" onClick={() => setCurrentTireIndex(c => Math.min(TIRE_POSITIONS.length - 1, c + 1))} disabled={currentTireIndex === TIRE_POSITIONS.length - 1 || !!iaLoading} className="px-4 py-2 text-sm font-medium bg-gray-700 rounded-md hover:bg-gray-600 disabled:opacity-50">Próximo</button>
+                                            <button type="button" onClick={() => setCurrentTireIndex(i => Math.max(0, i - 1))} disabled={currentTireIndex === 0}>Anterior</button>
+                                            <button type="button" onClick={() => setCurrentTireIndex(i => Math.min(TIRE_POSITIONS.length - 1, i + 1))} disabled={currentTireIndex === TIRE_POSITIONS.length - 1}>Próximo</button>
                                         </div>
                                     </div>
                                 )}
                             </div>
-                            {isPlateValidForNextStep && areAllTiresScanned && (
+                            
+                            {isPlateValidForNextStep && areAllTiresRegistered && (
                                 <div className="flex justify-end pt-5">
-                                    <button type="submit" disabled={!!iaLoading || loading} className="w-full md:w-auto inline-flex justify-center px-8 py-4 text-base font-medium text-white bg-green-600 border border-transparent rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 disabled:bg-gray-500">
-                                        {loading ? 'Cadastrando...' : 'Finalizar Cadastro'}
-                                    </button>
+                                    <button type="submit" disabled={loading} className="w-full md:w-auto inline-flex justify-center px-8 py-4 text-base font-medium text-white bg-green-600 border border-transparent rounded-md shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 disabled:bg-gray-500">Finalizar Cadastro</button>
                                 </div>
                             )}
                         </Form>
