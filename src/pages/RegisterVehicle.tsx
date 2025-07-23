@@ -3,7 +3,7 @@ import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
 import { getFirestore, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getAuth } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import imageCompression from 'browser-image-compression';
@@ -23,6 +23,7 @@ const RegisterVehicle = () => {
     const { user } = useAuth();
     const db = getFirestore();
     const storage = getStorage();
+    const functions = getFunctions();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [iaLoading, setIaLoading] = useState<'plate' | 'tire' | false>(false);
@@ -30,23 +31,23 @@ const RegisterVehicle = () => {
     const [tireFiles, setTireFiles] = useState<Record<string, File>>({});
     const [currentTireIndex, setCurrentTireIndex] = useState(0);
 
-    const callAnalysisFunction = async (functionName: string, imageBase64: string) => {
-        const auth = getAuth();
-        const currentUser = auth.currentUser;
-        if (!currentUser) throw new Error("Usuário não autenticado.");
-        const idToken = await currentUser.getIdToken();
-        const response = await fetch(`https://us-central1-sara-v10.cloudfunctions.net/${functionName}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
-            body: JSON.stringify({ data: { image: imageBase64 } })
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Erro do servidor: ${response.status} ${errorText}`);
-        }
-        const result = await response.json();
-        return result.data;
-    };
+    const validationSchema = Yup.object({
+        plate: Yup.string().transform(val => normalizePlate(val)).min(7, 'A placa deve ter 7 caracteres').required('A placa é obrigatória')
+            .test('is-unique', 'Esta placa já está cadastrada.', async (value) => {
+                if (!value || value.length !== 7) return true;
+                try {
+                    const q = query(collection(db, "vehicles"), where("plate", "==", value));
+                    const querySnapshot = await getDocs(q);
+                    return querySnapshot.empty;
+                } catch { return false; }
+            }),
+        tires: Yup.array().of(
+            Yup.object().shape({
+                week: Yup.string().matches(/^[0-9]{2}$/, 'Semana inválida (WW)').required('Obrigatório'),
+                year: Yup.string().matches(/^[0-9]{2}$/, 'Ano inválido (YY)').required('Obrigatório'),
+            })
+        )
+    });
 
     const handlePlateFileChange = async (file: File, setFieldValue: Function, validateField: Function) => {
         setIaLoading('plate');
@@ -54,9 +55,11 @@ const RegisterVehicle = () => {
             const compressedFile = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1280 });
             setPlatePhotoUrl(URL.createObjectURL(compressedFile));
             const imageBase64 = await toBase64(compressedFile);
-            const result = await callAnalysisFunction('analyzePlateImage', imageBase64);
-            if (result.plateText && result.plateText !== 'N/A') {
-                setFieldValue('plate', normalizePlate(result.plateText));
+            const analyzePlateImage = httpsCallable(functions, 'analyzePlateImage');
+            const result = await analyzePlateImage({ image: imageBase64 });
+            const { plateText } = result.data as { plateText: string };
+            if (plateText && plateText !== 'N/A') {
+                setFieldValue('plate', normalizePlate(plateText));
                 setTimeout(() => validateField('plate'), 100);
             } else { alert('Não foi possível ler a placa. Digite manualmente.'); }
         } catch (error) { console.error("--- ERRO DETALHADO (PLACA) ---", error); alert("Ocorreu um erro ao processar a imagem. Verifique o console."); }
@@ -72,12 +75,13 @@ const RegisterVehicle = () => {
             const imageUrl = URL.createObjectURL(compressedFile);
             formikHelpers.setFieldValue(`tires[${currentTireIndex}].imageUrl`, imageUrl);
             const imageBase64 = await toBase64(compressedFile);
-            const result = await callAnalysisFunction('analyzeTireImage', imageBase64);
-            formikHelpers.setFieldValue(`tires[${currentTireIndex}].dot`, result.dot || 'N/A');
-            formikHelpers.setFieldValue(`tires[${currentTireIndex}].brand`, result.brand || 'N/A');
-            formikHelpers.setFieldValue(`tires[${currentTireIndex}].week`, result.week || '');
-            formikHelpers.setFieldValue(`tires[${currentTireIndex}].year`, result.year || '');
-            formikHelpers.setFieldValue(`tires[${currentTireIndex}].condition`, result.condition || 'Bom');
+            const analyzeTireImage = httpsCallable(functions, 'analyzeTireImage');
+            const result = await analyzeTireImage({ image: imageBase64 });
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].dot`, result.data.dot || 'N/A');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].brand`, result.data.brand || 'N/A');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].week`, result.data.week || '');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].year`, result.data.year || '');
+            formikHelpers.setFieldValue(`tires[${currentTireIndex}].condition`, result.data.condition || 'Bom');
         } catch (error) { 
             console.error("--- ERRO DETALHADO (PNEU) ---", error); 
             alert("A IA não conseguiu analisar o pneu. Por favor, preencha os dados manualmente.");
@@ -127,23 +131,7 @@ const RegisterVehicle = () => {
                         position: pos, dot: '', brand: '', week: '', year: '', condition: 'Bom', imageUrl: ''
                     }))
                 }}
-                validationSchema={Yup.object({
-                    plate: Yup.string().transform(val => normalizePlate(val)).min(7, 'A placa é obrigatória e deve ter 7 caracteres.').required('A placa é obrigatória')
-                        .test('is-unique', 'Esta placa já está cadastrada.', async (value) => {
-                            if (!value || value.length !== 7) return true;
-                            try {
-                                const q = query(collection(db, "vehicles"), where("plate", "==", value));
-                                const querySnapshot = await getDocs(q);
-                                return querySnapshot.empty;
-                            } catch { return false; }
-                        }),
-                    tires: Yup.array().of(
-                        Yup.object().shape({
-                            week: Yup.string().matches(/^[0-9]{2}$/, 'Semana inválida (WW)').required('Obrigatório'),
-                            year: Yup.string().matches(/^[0-9]{2}$/, 'Ano inválido (YY)').required('Obrigatório'),
-                        })
-                    )
-                })}
+                validationSchema={validationSchema}
                 onSubmit={handleSubmit}
             >
                 {(formikProps) => {
@@ -191,7 +179,14 @@ const RegisterVehicle = () => {
                                                     {currentTireData.imageUrl ? <img src={currentTireData.imageUrl} alt="Pneu" className="w-full h-full object-cover rounded-lg"/> : <span className="text-gray-400 text-center px-2">Clique abaixo para fotografar</span>}
                                                     {iaLoading === 'tire' && <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center"><div className="w-8 h-8 border-4 border-white rounded-full border-t-transparent animate-spin"></div></div>}
                                                 </div>
-                                                <input key={currentTireIndex} id="tire-photo-upload" type="file" className="hidden" disabled={iaLoading} onChange={(e) => e.target.files && handleTireFileChange(e.target.files[0], formikProps)} />
+                                                <input
+                                                    key={currentTireIndex} // A MÁGICA PARA RESETAR O INPUT
+                                                    id="tire-photo-upload"
+                                                    type="file"
+                                                    className="hidden"
+                                                    disabled={iaLoading}
+                                                    onChange={(e) => e.target.files && handleTireFileChange(e.target.files[0], formikProps)}
+                                                />
                                                 <label htmlFor="tire-photo-upload" className={`mt-2 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-md transition-colors ${iaLoading ? 'opacity-50' : ''}`}><CameraIcon /></label>
                                             </div>
                                             <div className="flex-grow grid grid-cols-2 gap-4">
