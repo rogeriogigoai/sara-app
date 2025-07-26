@@ -141,9 +141,75 @@ const VerifyVehicle = () => {
         }
     };
     
-    const processValidation = async () => { /* ... (código existente) ... */ };
-    const handleFinalUpdate = async () => { /* ... (código existente) ... */ };
+    const processValidation = async () => {
+        if (!vehicle) return;
+        setLoading(true);
+        console.log("Iniciando validação...");
+        try {
+            const scannedTiresWithUrls = await Promise.all(
+                TIRE_POSITIONS.map(async (pos) => {
+                    const tire = scannedTires[pos] as TireData;
+                    if (!tire.file) throw new Error(`Arquivo de imagem faltando para a posição ${pos}`);
+                    const storageRef = ref(storage, `verifications/${vehicle.plate}/${pos}_${Date.now()}`);
+                    const snapshot = await uploadBytes(storageRef, tire.file);
+                    const downloadURL = await getDownloadURL(snapshot.ref);
+                    const { file, ...rest } = tire;
+                    return { ...rest, imageUrl: downloadURL };
+                })
+            );
+            
+            const originalTireKeys = new Set(vehicle.currentTires.map((t: TireData) => `${t.week}-${t.year}`));
+            const scannedTireKeys = new Set(scannedTiresWithUrls.map((t: any) => `${t.week}-${t.year}`));
+            const hasFraud = originalTireKeys.size !== scannedTireKeys.size || ![...originalTireKeys].every(key => scannedTireKeys.has(key));
+            let isRotated = false;
+            if(!hasFraud) { /* ... lógica de rodízio ... */ }
 
+            const resultStatus = hasFraud ? 'fraude' : (isRotated ? 'rodizio' : 'ok');
+            const changes = scannedTiresWithUrls.map(scanned => ({...scanned, status: originalTireKeys.has(`${scanned.week}-${scanned.year}`) ? 'ok' : 'fraud'}));
+            setValidationResult({ status: resultStatus, changes });
+
+            await addDoc(collection(db, "verifications"), {
+                vehicleId: vehicle.id, plate: vehicle.plate, status: resultStatus,
+                scannedTires: changes, originalTires: vehicle.currentTires,
+                createdAt: serverTimestamp(), createdBy: user?.uid,
+            });
+
+            if (hasFraud) { /* ... cria alerta de fraude ... */ } 
+            else if (isRotated) { /* ... cria alerta de rodízio ... */ }
+            
+            setStep('validation_results');
+        } catch (err) {
+            console.error("ERRO CRÍTICO ao processar validação:", err);
+            alert("Ocorreu um erro ao processar a validação. Verifique o console.");
+        } finally {
+            setLoading(false);
+        }
+    };
+    
+    const handleFinalUpdate = async () => {
+        if (!vehicle || Object.values(newTires).length < TIRE_POSITIONS.length) {
+            alert("É necessário escanear todos os 5 pneus novos."); return;
+        }
+        setLoading(true);
+        try {
+            const tiresToSave = await Promise.all(
+                TIRE_POSITIONS.map(async (pos) => {
+                    const tire = newTires[pos] as TireData;
+                    if (!tire.file) throw new Error(`Arquivo faltando para o pneu ${pos}`);
+                    const storageRef = ref(storage, `tires/${vehicle.plate}/${pos}_${Date.now()}`);
+                    const snapshot = await uploadBytes(storageRef, tire.file);
+                    const downloadURL = await getDownloadURL(snapshot.ref);
+                    const { file, imageUrl, ...rest } = tire;
+                    return { ...rest, imageUrl: downloadURL };
+                })
+            );
+            await updateDoc(doc(db, "vehicles", vehicle.id), { currentTires: tiresToSave });
+            alert("Veículo atualizado com sucesso!");
+            navigate("/");
+        } catch (err) { console.error(err); alert("Erro ao atualizar o veículo. Verifique o console."); }
+        finally { setLoading(false); }
+    };
+    
     const renderContent = () => {
         switch (step) {
             case 'validation_scanning': return <ScanInterface title={`Etapa 1: Validar Pneus de ${vehicle?.plate}`} onScan={(file: File, index: number) => handleScan(file, index, setScannedTires)} onFinish={processValidation} loading={loading} scannedData={scannedTires} iaLoading={iaLoading} currentIndex={scanIndex} onIndexChange={setScanIndex} />;

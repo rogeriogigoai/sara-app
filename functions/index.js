@@ -8,9 +8,20 @@ const genAI = new (require("@google/generative-ai").GoogleGenerativeAI)(function
 const MODEL_NAME = "gemini-1.5-flash";
 
 function extractJson(text) {
+    console.log("Texto bruto recebido da IA:", text);
     const match = text.match(/{[\s\S]*}/);
-    if (!match) { console.error("Nenhum JSON encontrado na resposta da IA:", text); return null; }
-    try { return JSON.parse(match[0]); } catch (e) { console.error("Falha ao fazer parse do JSON da IA:", e); return null; }
+    if (!match) {
+        console.error("Nenhum bloco JSON encontrado no texto:", text);
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(match[0]);
+        console.log("JSON extraído com sucesso:", parsed);
+        return parsed;
+    } catch (e) {
+        console.error("Falha ao fazer parse do JSON extraído:", match[0], e);
+        return null;
+    }
 }
 
 exports.analyzePlateImage = functions.https.onCall(async (data, context) => {
@@ -19,12 +30,7 @@ exports.analyzePlateImage = functions.https.onCall(async (data, context) => {
     if (!imageBase64) throw new functions.https.HttpsError("invalid-argument", "Nenhuma imagem foi fornecida.");
     try {
         const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-        // --- PROMPT CORRIGIDO E MAIS ROBUSTO ---
-        const prompt = `Sua tarefa é analisar a imagem de uma placa de veículo. Siga estas regras estritamente:
-1.  Extraia APENAS o texto alfanumérico da placa.
-2.  Retorne SOMENTE um objeto JSON válido com uma única chave "plateText".
-Exemplo de saída: {"plateText": "BRA2E19"}.
-Se não for possível ler a placa, retorne {"plateText": "N/A"}.`;
+        const prompt = `Analise a imagem de uma placa de veículo. Extraia apenas o texto alfanumérico da placa. Retorne SOMENTE um objeto JSON válido com uma única chave "plateText". Exemplo: {"plateText": "BRA2E19"}. Se não for possível ler a placa, retorne {"plateText": "N/A"}.`;
         const imagePart = { inlineData: { data: imageBase64, mimeType: "image/jpeg" } };
         const result = await model.generateContent([prompt, imagePart]);
         const text = result.response.text();
