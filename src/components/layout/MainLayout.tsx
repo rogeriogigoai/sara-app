@@ -11,6 +11,7 @@ const CloseIcon = () => ( <svg xmlns="http://www.w3.org/2000/svg" className="h-6
 const navItems = [
   { name: 'Dashboard', path: '/', minPermission: 1 },
   { name: 'Cadastrar Veículo', path: '/register-vehicle', minPermission: 2 },
+  { name: 'Listar Frota', path: '/vehicles', minPermission: 3 },
   { name: 'Verificar Veículo', path: '/verify-vehicle', minPermission: 2 },
   { name: 'Histórico de Verificações', path: '/verifications-history', minPermission: 3 },
   { name: 'Alertas', path: '/view-alerts', minPermission: 1 },
@@ -23,7 +24,7 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const auth = getAuth();
-  const { permissionLevel } = useAuth();
+  const { permissionLevel } = useAuth(); // Continuamos a pegar o nível para futuras verificações
 
   const handleLogout = () => {
     signOut(auth);
@@ -31,7 +32,6 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
   };
 
   const currentPage = [...navItems, profileNavItem].find(item => item.path === location.pathname)?.name || 'SARA';
-  const accessibleNavItems = navItems.filter(item => permissionLevel && permissionLevel >= item.minPermission);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
@@ -42,7 +42,8 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
         </div>
         <nav className="flex-grow">
           <ul>
-            {accessibleNavItems.map((item) => (
+            {/* LÓGICA DE FILTRO REMOVIDA TEMPORARIAMENTE PARA TESTE */}
+            {navItems.map((item) => (
               <li key={item.name} className="mb-2">
                 <NavLink to={item.path} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `flex items-center p-2 rounded-lg hover:bg-gray-700 transition-colors ${isActive ? 'bg-blue-600' : ''}`}>
                   {item.name}

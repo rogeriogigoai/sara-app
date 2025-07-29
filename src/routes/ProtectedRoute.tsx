@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface ProtectedRouteProps {
   children: JSX.Element;
-  requiredPermission: number; // Agora requer um nível de permissão
+  requiredPermission: number;
 }
 
 const ProtectedRoute = ({ children, requiredPermission }: ProtectedRouteProps) => {
@@ -13,11 +13,11 @@ const ProtectedRoute = ({ children, requiredPermission }: ProtectedRouteProps) =
     return <div>Carregando...</div>;
   }
 
-  // Verifica se o nível de permissão do usuário é igual ou superior ao necessário
+  // LÓGICA CORRIGIDA
   if (permissionLevel !== null && permissionLevel >= requiredPermission) {
-    return children;
+    return children; // Se tem permissão, renderiza a página solicitada
   } else {
-    // Se não tiver permissão, redireciona para o Dashboard
+    // Se não tem permissão, redireciona para a página inicial (Dashboard)
     return <Navigate to="/" replace />;
   }
 };

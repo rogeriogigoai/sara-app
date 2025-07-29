@@ -144,7 +144,6 @@ const VerifyVehicle = () => {
     const processValidation = async () => {
         if (!vehicle) return;
         setLoading(true);
-        console.log("Iniciando validação...");
         try {
             const scannedTiresWithUrls = await Promise.all(
                 TIRE_POSITIONS.map(async (pos) => {
@@ -157,26 +156,25 @@ const VerifyVehicle = () => {
                     return { ...rest, imageUrl: downloadURL };
                 })
             );
-            
             const originalTireKeys = new Set(vehicle.currentTires.map((t: TireData) => `${t.week}-${t.year}`));
             const scannedTireKeys = new Set(scannedTiresWithUrls.map((t: any) => `${t.week}-${t.year}`));
             const hasFraud = originalTireKeys.size !== scannedTireKeys.size || ![...originalTireKeys].every(key => scannedTireKeys.has(key));
             let isRotated = false;
-            if(!hasFraud) { /* ... lógica de rodízio ... */ }
-
+            if (!hasFraud) { /* ... lógica de rodízio ... */ }
             const resultStatus = hasFraud ? 'fraude' : (isRotated ? 'rodizio' : 'ok');
             const changes = scannedTiresWithUrls.map(scanned => ({...scanned, status: originalTireKeys.has(`${scanned.week}-${scanned.year}`) ? 'ok' : 'fraud'}));
             setValidationResult({ status: resultStatus, changes });
-
             await addDoc(collection(db, "verifications"), {
                 vehicleId: vehicle.id, plate: vehicle.plate, status: resultStatus,
                 scannedTires: changes, originalTires: vehicle.currentTires,
                 createdAt: serverTimestamp(), createdBy: user?.uid,
             });
-
-            if (hasFraud) { /* ... cria alerta de fraude ... */ } 
-            else if (isRotated) { /* ... cria alerta de rodízio ... */ }
-            
+            const cleanFoundTires = changes.map(({ file, ...rest }: any) => rest);
+            if (hasFraud) { await addDoc(collection(db, "alerts"), { vehicleId: vehicle.id, plate: vehicle.plate, type: "fraude", severity: "critica", status: "pendente", details: { foundTires: cleanFoundTires, originalTires: vehicle.currentTires }, createdAt: serverTimestamp(), createdBy: user?.uid, }); }
+            else if (isRotated) {
+                await addDoc(collection(db, "alerts"), { vehicleId: vehicle.id, plate: vehicle.plate, type: "rodizio", severity: "informativo", status: "resolvido", details: { foundTires: cleanFoundTires, originalTires: vehicle.currentTires }, createdAt: serverTimestamp(), createdBy: user?.uid, });
+                await updateDoc(doc(db, "vehicles", vehicle.id), { currentTires: cleanFoundTires });
+            }
             setStep('validation_results');
         } catch (err) {
             console.error("ERRO CRÍTICO ao processar validação:", err);
@@ -209,7 +207,7 @@ const VerifyVehicle = () => {
         } catch (err) { console.error(err); alert("Erro ao atualizar o veículo. Verifique o console."); }
         finally { setLoading(false); }
     };
-    
+
     const renderContent = () => {
         switch (step) {
             case 'validation_scanning': return <ScanInterface title={`Etapa 1: Validar Pneus de ${vehicle?.plate}`} onScan={(file: File, index: number) => handleScan(file, index, setScannedTires)} onFinish={processValidation} loading={loading} scannedData={scannedTires} iaLoading={iaLoading} currentIndex={scanIndex} onIndexChange={setScanIndex} />;

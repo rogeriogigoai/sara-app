@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/react-csv": "^1.1.10",
     "browser-image-compression": "^2.0.2",
     "firebase": "^11.10.0",
     "formik": "^2.4.6",
     "react": "^19.1.0",
+    "react-csv": "^2.2.2",
     "react-dom": "^19.1.0",
     "react-firebase-hooks": "^5.1.1",
     "react-router-dom": "^7.7.0",
