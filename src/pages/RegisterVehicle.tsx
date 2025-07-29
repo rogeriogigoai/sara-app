@@ -90,34 +90,50 @@ const RegisterVehicle = () => {
         }
     };
 
+    // FUNÇÃO DE SUBMIT CORRIGIDA E COM LOGS
     const handleSubmit = async (values: any) => {
+        console.log("Botão 'Finalizar Cadastro' clicado. Verificando condições...");
+        if (Object.values(tireFiles).length !== TIRE_POSITIONS.length) {
+            alert('Por favor, certifique-se de que uma foto foi enviada para cada um dos 5 pneus.');
+            console.error("Tentativa de submit falhou: Nem todos os 5 pneus têm um arquivo de imagem associado.", tireFiles);
+            return;
+        }
+        
         setLoading(true);
+        console.log("Iniciando processo de salvamento com os valores:", values);
         const finalPlate = normalizePlate(values.plate);
         try {
             const tiresToSave = await Promise.all(
                 values.tires.map(async (tire: any) => {
                     const tireFile = tireFiles[tire.position];
                     if (!tireFile) throw new Error(`Arquivo de imagem faltando para o pneu ${tire.position}`);
+                    
+                    console.log(`Fazendo upload da imagem para: ${tire.position}`);
                     const storageRef = ref(storage, `tires/${finalPlate}/${tire.position}_${Date.now()}`);
                     const snapshot = await uploadBytes(storageRef, tireFile);
                     const downloadURL = await getDownloadURL(snapshot.ref);
+                    
                     const { imageUrl, ...rest } = tire;
                     return { ...rest, imageUrl: downloadURL };
                 })
             );
+
+            console.log("Todos os uploads concluídos. Salvando no Firestore...");
             await addDoc(collection(db, 'vehicles'), {
                 plate: finalPlate,
                 createdAt: serverTimestamp(),
                 createdBy: user?.uid,
                 currentTires: tiresToSave,
             });
+
             alert('Veículo cadastrado com sucesso!');
             navigate('/');
         } catch (error) {
-            console.error("Erro ao cadastrar veículo:", error);
-            alert('Ocorreu um erro ao cadastrar.');
+            console.error("ERRO CRÍTICO ao cadastrar veículo:", error);
+            alert('Ocorreu um erro ao cadastrar. Verifique o console para mais detalhes.');
         } finally {
             setLoading(false);
+            console.log("Processo de salvamento finalizado.");
         }
     };
 
@@ -139,7 +155,6 @@ const RegisterVehicle = () => {
                     const { values, setFieldValue, errors, touched, validateField } = formikProps;
                     const currentTireData = values.tires[currentTireIndex];
                     const isPlateValidForNextStep = !errors.plate && normalizePlate(values.plate).length === 7;
-                    // LÓGICA CORRIGIDA
                     const areAllTiresRegistered = values.tires.every(t => t.week && t.year && tireFiles[t.position]);
 
                     return (
