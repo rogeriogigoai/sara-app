@@ -24,7 +24,7 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const auth = getAuth();
-  const { permissionLevel } = useAuth(); // Continuamos a pegar o nível para futuras verificações
+  const { permissionLevel } = useAuth();
 
   const handleLogout = () => {
     signOut(auth);
@@ -32,6 +32,9 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
   };
 
   const currentPage = [...navItems, profileNavItem].find(item => item.path === location.pathname)?.name || 'SARA';
+  
+  // LÓGICA DO FILTRO CORRIGIDA
+  const accessibleNavItems = navItems.filter(item => permissionLevel !== null && permissionLevel >= item.minPermission);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
@@ -42,8 +45,7 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
         </div>
         <nav className="flex-grow">
           <ul>
-            {/* LÓGICA DE FILTRO REMOVIDA TEMPORARIAMENTE PARA TESTE */}
-            {navItems.map((item) => (
+            {accessibleNavItems.map((item) => (
               <li key={item.name} className="mb-2">
                 <NavLink to={item.path} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `flex items-center p-2 rounded-lg hover:bg-gray-700 transition-colors ${isActive ? 'bg-blue-600' : ''}`}>
                   {item.name}
@@ -53,9 +55,11 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
           </ul>
         </nav>
         <div className="border-t border-gray-700 pt-4">
-            <NavLink to={profileNavItem.path} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `flex items-center p-2 rounded-lg hover:bg-gray-700 transition-colors ${isActive ? 'bg-blue-600' : ''}`}>
-                {profileNavItem.name}
-            </NavLink>
+            {permissionLevel !== null && permissionLevel >= profileNavItem.minPermission && (
+                <NavLink to={profileNavItem.path} onClick={() => setSidebarOpen(false)} className={({ isActive }) => `flex items-center p-2 rounded-lg hover:bg-gray-700 transition-colors ${isActive ? 'bg-blue-600' : ''}`}>
+                    {profileNavItem.name}
+                </NavLink>
+            )}
             <button onClick={handleLogout} className="w-full p-2 mt-2 text-left text-red-400 rounded-lg hover:bg-red-800 hover:text-white transition-colors">
               Sair
             </button>
